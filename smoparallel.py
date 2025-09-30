@@ -26,6 +26,7 @@ class SVM:
         self.support_vectors = np.array([])
         self.support_labels = np.array([])
         self.numthreads = numthreads
+        self.sum_columns_calculation_time = 0
 
         if kernel_type == 'linear':
             self.kernel = self.linear_kernel
@@ -76,7 +77,6 @@ class SVM:
         self.alpha = np.zeros(N)
         self.support_labels = y_train
         self.support_vectors = x_train
-        self.sumtimes = 0
         iter_idx = 0
 
         # calcolo iniziale cache errori
@@ -113,6 +113,7 @@ class SVM:
             K_i1 = self.rbf_kernel_column_multithread(i_1)
             K_i2 = self.rbf_kernel_column_multithread(i_2)
             print(f"Parallelo: {(time.time() - start_time)}")
+            self.sum_columns_calculation_time += time.time() - start_time
 
             k11 = K_i1[i_1]
             k22 = K_i2[i_2]
@@ -173,7 +174,7 @@ class SVM:
         self.alpha = self.alpha[support_vectors_idx]
 
         print(f"Training summary: {iter_idx} iterations")
-        print(f"Tempo calcolo colonne interno: {self.sumtimes }")
+        print(f"Tempo calcolo colonne: {self.sum_columns_calculation_time}")
         print("SVM training using SMO algorithm - DONE!")
 
     # ------------------- BOUNDS -------------------
