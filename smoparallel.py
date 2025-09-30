@@ -3,13 +3,20 @@ import numpy as np
 from threading import Thread
 import time
 
+
 class SVM:
-    def __init__(self, numthreads: int = 1, c: float = 1., kkt_thr: float = 1e-3, max_iter: int = 1e4, kernel_type: str = 'linear', gamma_rbf: float = 1.) -> None:
+    def __init__(
+        self,
+        numthreads: int = 1,
+        c: float = 1.,
+        kkt_thr: float = 1e-3,
+        max_iter: int = 1e4,
+        kernel_type: str = 'linear',
+        gamma_rbf: float = 1.
+    ) -> None:
         if kernel_type not in ['linear', 'rbf']:
             raise ValueError('kernel_type must be either {} or {}'.format('linear', 'rbf'))
-
         super().__init__()
-
         self.c = float(c)
         self.max_iter = int(max_iter)
         self.kkt_thr = kkt_thr
@@ -19,7 +26,12 @@ class SVM:
         self.support_vectors = np.array([])
         self.support_labels = np.array([])
         self.numthreads = numthreads
-        self.sumtimes_colum_calculation = 0
+
+        if kernel_type == 'linear':
+            self.kernel = self.linear_kernel
+        elif kernel_type == 'rbf':
+            self.kernel = self.rbf_kernel
+            self.gamma_rbf = gamma_rbf
 
     # ------------------- PREDICT -------------------
     def predict(self, x: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -64,23 +76,28 @@ class SVM:
         self.alpha = np.zeros(N)
         self.support_labels = y_train
         self.support_vectors = x_train
-
+        self.sumtimes = 0
         iter_idx = 0
 
-        sq_norms = np.sum(x_train ** 2, axis=1)
-        K = np.exp(-self.gamma_rbf * (sq_norms[:, None] + sq_norms[None, :] - 2 * x_train @ x_train.T))
-        error_cache = (self.alpha * y_train) @ K + self.b - y_train
+        # calcolo iniziale cache errori
+        if self.kernel == self.linear_kernel:
+            K = x_train @ x_train.T
+            error_cache = (self.alpha * y_train) @ K + self.b - y_train
+        elif self.kernel == self.rbf_kernel:
+            sq_norms = np.sum(x_train ** 2, axis=1)
+            K = np.exp(
+                -self.gamma_rbf *
+                (sq_norms[:, None] + sq_norms[None, :] - 2 * x_train @ x_train.T)
+            )
+            error_cache = (self.alpha * y_train) @ K + self.b - y_train
 
         print("SVM training using SMO algorithm - START")
+        start_time_fit = time.time()
 
         while iter_idx < self.max_iter:
-            # if iter_idx % 50 == 0:
-            #     for i in range(N):
-            #         K_i = self.kernel_column(i)
-            #         error_cache[i] = np.dot(self.alpha * self.support_labels, K_i) + self.b - y_train[i]
+            i_2, i_1 = self.mvp_heuristic(error_cache)
 
-            i_2, i_1 = self.mvp_heuristic(error_cache)  # Seleziona i_MVP e j_MVP
-
+            # Seleziona i_MVP e j_MVP
             if i_2 == -1 or i_1 == -1:
                 break
 
@@ -91,10 +108,12 @@ class SVM:
             y_1, alpha_1 = self.support_labels[i_1], self.alpha[i_1]
             y_2, alpha_2 = self.support_labels[i_2], self.alpha[i_2]
 
+            # --- Precalcolo colonne kernel ---
             start_time = time.time()
             K_i1 = self.rbf_kernel_column_multithread(i_1)
             K_i2 = self.rbf_kernel_column_multithread(i_2)
-            self.sumtimes_colum_calculation+= time.time() - start_time
+            print(f"Parallelo: {(time.time() - start_time)}")
+
             k11 = K_i1[i_1]
             k22 = K_i2[i_2]
             k12 = K_i1[i_2]
@@ -117,8 +136,16 @@ class SVM:
             alpha_1_new = alpha_1 + y_1 * y_2 * (alpha_2 - alpha_2_new)
 
             # --- Aggiornamento b ---
-            b1 = self.b - E_1 - y_1 * (alpha_1_new - alpha_1) * k11 - y_2 * (alpha_2_new - alpha_2) * k12
-            b2 = self.b - E_2 - y_1 * (alpha_1_new - alpha_1) * k12 - y_2 * (alpha_2_new - alpha_2) * k22
+            b1 = (
+                self.b - E_1
+                - y_1 * (alpha_1_new - alpha_1) * k11
+                - y_2 * (alpha_2_new - alpha_2) * k12
+            )
+            b2 = (
+                self.b - E_2
+                - y_1 * (alpha_1_new - alpha_1) * k12
+                - y_2 * (alpha_2_new - alpha_2) * k22
+            )
 
             if 0 < alpha_1_new < self.c:
                 self.b = b1
@@ -139,11 +166,14 @@ class SVM:
             iter_idx += 1
 
         # --- Filtraggio support vectors ---
+        end_time_fit = time.time()
         support_vectors_idx = (self.alpha != 0)
         self.support_labels = self.support_labels[support_vectors_idx]
         self.support_vectors = self.support_vectors[support_vectors_idx, :]
         self.alpha = self.alpha[support_vectors_idx]
 
+        print(f"Training summary: {iter_idx} iterations")
+        print(f"Tempo calcolo colonne interno: {self.sumtimes }")
         print("SVM training using SMO algorithm - DONE!")
 
     # ------------------- BOUNDS -------------------
@@ -160,17 +190,21 @@ class SVM:
         n = self.support_vectors.shape[0]
         x_i = self.support_vectors[i]
         n_threads = self.numthreads
+
+        # Prealloca array risultato
         col = np.zeros(n)
 
         # Dividi gli indici tra i thread
         batch_size = n // n_threads
         threads = []
+
         for t in range(n_threads):
             start_idx = t * batch_size
             end_idx = n if t == n_threads - 1 else (t + 1) * batch_size
-            thread = Thread(target=compute_rbf_block,
-                            args=(self.support_vectors, x_i, self.gamma_rbf,
-                                  list(range(start_idx, end_idx)), col, start_idx))
+            thread = Thread(
+                target=compute_rbf_block,
+                args=(self.support_vectors, x_i, self.gamma_rbf, list(range(start_idx, end_idx)), col, start_idx)
+            )
             threads.append(thread)
             thread.start()
 
@@ -179,7 +213,24 @@ class SVM:
 
         return col
 
+    # ------------------- KERNELS -------------------
+    def rbf_kernel(self, u, v):
+        if np.ndim(v) == 1:
+            v = v[np.newaxis, :]
+        if np.ndim(u) == 1:
+            u = u[np.newaxis, :]
+        dist_squared = np.linalg.norm(u[:, :, np.newaxis] - v.T[np.newaxis, :, :], axis=1) ** 2
+        dist_squared = np.squeeze(dist_squared)
+        return np.exp(-self.gamma_rbf * dist_squared)
+
+    @staticmethod
+    def linear_kernel(u, v) -> np.ndarray:
+        return np.dot(u, v.T)
+
+
 def compute_rbf_block(support_vectors, x_i, gamma_rbf, indices, result_list, offset):
     for idx, global_idx in enumerate(indices):
         diff = support_vectors[global_idx] - x_i
         result_list[offset + idx] = np.exp(-gamma_rbf * np.dot(diff, diff))
+
+
