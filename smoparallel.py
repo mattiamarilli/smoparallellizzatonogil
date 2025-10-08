@@ -3,6 +3,8 @@ from typing import Tuple
 import numpy as np
 from threading import Thread
 import time
+import math
+
 
 
 class SVM:
@@ -113,8 +115,8 @@ class SVM:
 
             # --- Precalcolo colonne kernel ---
             start_time = time.time()
-            K_i1 = self.rbf_kernel_column_multithread(i_1)
-            K_i2 = self.rbf_kernel_column_multithread(i_2)
+            K_i1 = np.array(self.rbf_kernel_column_multithread(i_1, gamma_rbf=self.gamma_rbf))
+            K_i2 = np.array(self.rbf_kernel_column_multithread(i_2, gamma_rbf=self.gamma_rbf))
             #print(f"Parallelo: {(time.time() - start_time)}")
             self.sum_columns_calculation_time += time.time() - start_time
 
@@ -190,29 +192,30 @@ class SVM:
             ub = min(self.c, self.c + alpha_2 - alpha_1)
         return lb, ub
 
-    def rbf_kernel_column_multithread(self, i: int) -> np.ndarray:
-        n = self.support_vectors.shape[0]
-        x_i = self.support_vectors[i]
-        col = np.zeros(n)
+    def rbf_kernel_column_multithread(self, i: int, gamma_rbf: float):
+        support_vectors = self.support_vectors
+        n = len(support_vectors)
+        col = [0.0] * n
 
-        def compute_block(start_idx, end_idx):
-            for idx, global_idx in enumerate(range(start_idx, end_idx)):
-                diff = self.support_vectors[global_idx] - x_i
-                col[global_idx] = np.exp(-self.gamma_rbf * np.dot(diff, diff))
+        def worker(start, end):
+            for idx in range(start, end):
+                sq_norm = 0.0
+                for d1, d2 in zip(support_vectors[idx], support_vectors[i]):
+                    delta = d1 - d2
+                    sq_norm += delta * delta
+                col[idx] = math.exp(-gamma_rbf * sq_norm)
 
         batch_size = n // self.numthreads
         futures = []
         for t in range(self.numthreads):
             start_idx = t * batch_size
             end_idx = n if t == self.numthreads - 1 else (t + 1) * batch_size
-            futures.append(self.thread_pool.submit(compute_block, start_idx, end_idx))
+            futures.append(self.thread_pool.submit(worker, start_idx, end_idx))
 
-        # Attende il completamento
         for f in futures:
             f.result()
 
         return col
-
 
     # ------------------- KERNELS -------------------
     def rbf_kernel(self, u, v):

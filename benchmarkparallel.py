@@ -5,7 +5,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from smoparallel import SVM
 
-def benchmark_svm(num_samples=7000, num_features=10, test_size=0.2, random_state=42):
+def benchmark_svm(num_samples=5000, num_features=100, test_size=0.2, random_state=42):
     X, y = make_classification(
         n_samples=num_samples,
         n_features=num_features,
