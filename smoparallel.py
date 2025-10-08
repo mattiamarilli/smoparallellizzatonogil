@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Tuple
 import numpy as np
 from threading import Thread
@@ -27,6 +28,8 @@ class SVM:
         self.support_labels = np.array([])
         self.numthreads = numthreads
         self.sum_columns_calculation_time = 0
+        self.thread_pool = ThreadPoolExecutor(max_workers=numthreads)
+
 
         if kernel_type == 'linear':
             self.kernel = self.linear_kernel
@@ -112,7 +115,7 @@ class SVM:
             start_time = time.time()
             K_i1 = self.rbf_kernel_column_multithread(i_1)
             K_i2 = self.rbf_kernel_column_multithread(i_2)
-            print(f"Parallelo: {(time.time() - start_time)}")
+            #print(f"Parallelo: {(time.time() - start_time)}")
             self.sum_columns_calculation_time += time.time() - start_time
 
             k11 = K_i1[i_1]
@@ -190,29 +193,26 @@ class SVM:
     def rbf_kernel_column_multithread(self, i: int) -> np.ndarray:
         n = self.support_vectors.shape[0]
         x_i = self.support_vectors[i]
-        n_threads = self.numthreads
-
-        # Prealloca array risultato
         col = np.zeros(n)
 
-        # Dividi gli indici tra i thread
-        batch_size = n // n_threads
-        threads = []
+        def compute_block(start_idx, end_idx):
+            for idx, global_idx in enumerate(range(start_idx, end_idx)):
+                diff = self.support_vectors[global_idx] - x_i
+                col[global_idx] = np.exp(-self.gamma_rbf * np.dot(diff, diff))
 
-        for t in range(n_threads):
+        batch_size = n // self.numthreads
+        futures = []
+        for t in range(self.numthreads):
             start_idx = t * batch_size
-            end_idx = n if t == n_threads - 1 else (t + 1) * batch_size
-            thread = Thread(
-                target=compute_rbf_block,
-                args=(self.support_vectors, x_i, self.gamma_rbf, list(range(start_idx, end_idx)), col, start_idx)
-            )
-            threads.append(thread)
-            thread.start()
+            end_idx = n if t == self.numthreads - 1 else (t + 1) * batch_size
+            futures.append(self.thread_pool.submit(compute_block, start_idx, end_idx))
 
-        for thread in threads:
-            thread.join()
+        # Attende il completamento
+        for f in futures:
+            f.result()
 
         return col
+
 
     # ------------------- KERNELS -------------------
     def rbf_kernel(self, u, v):
