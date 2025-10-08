@@ -6,7 +6,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from smoparallel import SVM
 
-
 def benchmark_svm(num_samples=1000, num_features=10, test_size=0.2, random_state=42):
     X, y = make_classification(
         n_samples=num_samples,
@@ -30,7 +29,7 @@ def benchmark_svm(num_samples=1000, num_features=10, test_size=0.2, random_state
     print("Benchmarking SVM Custom...")
     gamma = 1.0 / num_features
     model = SVM(
-        numthreads=3,
+        numthreads=1,
         c=1.0,
         kkt_thr=1e-3,
         max_iter=1000,
